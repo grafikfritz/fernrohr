@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Fernrohr · Test</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #eee; overflow: hidden;
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none; touch-action: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #setup { position: fixed; inset: 0; overflow: auto; background: #111; padding: 22px 22px 40px;
+    padding-left: max(22px, env(safe-area-inset-left)); padding-right: max(22px, env(safe-area-inset-right));
+    touch-action: pan-y; }
+  #setup h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+  #setup p { margin: 0 0 14px; color: #aaa; max-width: 46em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 22px; max-width: 900px; }
+  .row label.t { display: block; color: #999; font-size: 13px; margin-bottom: 5px; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button { background: #222; color: #ddd; border: 1px solid #333; border-radius: 8px; padding: 8px 11px; font: inherit; }
+  .seg button.on { background: #e9e2c8; color: #111; border-color: #e9e2c8; }
+  input[type=range] { width: 100%; }
+  .val { color: #ddd; font-variant-numeric: tabular-nums; }
+  #go { margin-top: 20px; background: #f0c419; color: #111; border: 0; border-radius: 10px; padding: 14px 22px;
+    font-weight: 600; font-size: 17px; font-family: inherit; }
+  #status { margin-top: 12px; color: #8a8; font-size: 13px; }
+  #status.err { color: #e88; }
+  #gear { position: fixed; left: max(8px, env(safe-area-inset-left)); bottom: 8px; width: 34px; height: 34px;
+    border-radius: 17px; border: 1px solid #333; background: #111; color: #888; font-size: 16px; display: none; z-index: 5; }
+  #rotate { position: fixed; inset: 0; background: #000; display: none; align-items: center; justify-content: center;
+    text-align: center; padding: 30px; color: #bbb; z-index: 6; }
+  @media (orientation: portrait) { body.running.cb #rotate { display: flex; } }
+  #dbg { position: fixed; left: 52px; bottom: 6px; font: 11px/1.3 ui-monospace, monospace; color: #6c6; z-index: 7; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="gear" aria-label="Einstellungen">⚙</button>
+<div id="rotate">Handy quer halten<br>und ins Cardboard stecken.</div>
+<div id="dbg"></div>
+
+<div id="setup">
+  <h1>Fernrohr · Test</h1>
+  <p>Handy quer ins Cardboard. Tippen (oder Cardboard-Taste) wirft die Münze ein, dann kannst du dich rundum umschauen. Nach Ablauf schließt die Blende, nochmal tippen startet neu.</p>
+
+  <div class="grid">
+    <div class="row">
+      <label class="t">Ansicht</label>
+      <div class="seg" data-key="view">
+        <button data-v="vr">VR (Cardboard)</button>
+        <button data-v="scope">Fernrohr (Cardboard, Kreise)</button>
+        <button data-v="mono">Ohne Cardboard</button>
+      </div>
+    </div>
+    <div class="row">
+      <label class="t">Sichtfeld je Auge: <span class="val" id="v-fov"></span>°</label>
+      <input type="range" min="15" max="110" step="1" data-key="fov">
+    </div>
+    <div class="row">
+      <label class="t">Blick nach unten geneigt: <span class="val" id="v-tilt"></span>°</label>
+      <input type="range" min="0" max="40" step="1" data-key="tilt">
+    </div>
+    <div class="row">
+      <label class="t">Blickdauer: <span class="val" id="v-dur"></span></label>
+      <input type="range" min="0" max="180" step="10" data-key="dur">
+    </div>
+    <div class="row">
+      <label class="t">Augenabstand: <span class="val" id="v-ipd"></span> mm</label>
+      <input type="range" min="52" max="74" step="1" data-key="ipd">
+    </div>
+    <div class="row">
+      <label class="t">Ticken des Zeitwerks</label>
+      <div class="seg" data-key="tick">
+        <button data-v="on">an</button>
+        <button data-v="off">aus</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="go">Start</button>
+  <div id="status">Panorama lädt …</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- Panorama ----------
+  // 360°-Zylinderpanorama. Zuerst lokale Datei, sonst Original bei fal, zuletzt kleine Vorschau.
+  var PANO = {
+    src: ["bilder/pano.jpg", "https://v3b.fal.media/files/b/0ab071ae/HZmIFjzX_gEPYExV5FTJN_O1L7p5Mk.jpg", "bilder/pano-vorschau.webp"],
+    seam: 0.04,        // Anteil der Bildbreite, der an der Naht überblendet wird (0 = Bild ist nahtlos)
+    horizon: 0.16,  // Höhe des Horizonts im Bild (0 oben, 1 unten)
+    startU: 0.55,    // wohin man beim Münzeinwurf schaut (0..1 über die Bildbreite)
+    sky: "#e7e7ea", ground: "#c49b70"
+  };
+  var MAX_W = 6144, MAX_PX = 15.5e6;   // Grenzen für iOS-Canvas
+
+  var pano = null, panoW = 0, panoH = 0;   // nahtloses Panorama (Canvas)
+  var statusEl = document.getElementById("status");
+
+  function loadFirst(list, i, done) {
+    if (i >= list.length) { done(null); return; }
+    var im = new Image();
+    im.onload = function () { done(im); };
+    im.onerror = function () { loadFirst(list, i + 1, done); };
+    im.src = list[i];
+  }
+  function buildPano(im) {
+    var iw = im.naturalWidth, ih = im.naturalHeight;
+    var w = PANO.seam, srcPeriod = iw * (1 - w);
+    var f = Math.min(1, MAX_W / srcPeriod, Math.sqrt(MAX_PX / (srcPeriod * ih)));
+    panoW = Math.round(srcPeriod * f); panoH = Math.round(ih * f);
+    var c = document.createElement("canvas"); c.width = panoW; c.height = panoH;
+    var g = c.getContext("2d");
+    g.drawImage(im, 0, 0, srcPeriod, ih, 0, 0, panoW, panoH);
+    if (w > 0) {
+      // Das Bildende wird über den Bildanfang geblendet, damit die Naht verschwindet.
+      var bw = Math.round(iw * w * f), b = document.createElement("canvas"); b.width = bw; b.height = panoH;
+      var bg = b.getContext("2d");
+      bg.drawImage(im, srcPeriod, 0, iw - srcPeriod, ih, 0, 0, bw, panoH);
+      bg.globalCompositeOperation = "destination-in";
+      var gr = bg.createLinearGradient(0, 0, bw, 0);
+      gr.addColorStop(0, "rgba(0,0,0,1)"); gr.addColorStop(1, "rgba(0,0,0,0)");
+      bg.fillStyle = gr; bg.fillRect(0, 0, bw, panoH);
+      g.drawImage(b, 0, 0);
+    }
+    pano = c;
+  }
+  loadFirst(PANO.src, 0, function (im) {
+    if (!im) { statusEl.textContent = "Panorama konnte nicht geladen werden."; statusEl.className = "err"; return; }
+    buildPano(im);
+    statusEl.textContent = "Panorama: " + im.naturalWidth + " × " + im.naturalHeight + " px" + (im.naturalWidth < 2000 ? " (nur Vorschau, unscharf)" : "");
+  });
+
+  // ---------- Einstellungen ----------
+  var FOV_DEFAULT = { vr: 85, scope: 28, mono: 70 };
+  var S = { view: "vr", fov: 85, tilt: 15, dur: 90, ipd: 62, tick: "on" };
+  try { var saved = JSON.parse(localStorage.getItem("fernrohr2") || "{}"); for (var k in saved) if (k in S) S[k] = saved[k]; } catch (e) {}
+  function save() { try { localStorage.setItem("fernrohr2", JSON.stringify(S)); } catch (e) {} }
+  function syncUI() {
+    document.querySelectorAll(".seg").forEach(function (seg) {
+      seg.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b.dataset.v === S[seg.dataset.key]); });
+    });
+    document.querySelectorAll("input[type=range]").forEach(function (r) { r.value = S[r.dataset.key]; });
+    document.getElementById("v-fov").textContent = S.fov;
+    document.getElementById("v-tilt").textContent = S.tilt;
+    document.getElementById("v-dur").textContent = S.dur ? S.dur + " s" : "ohne Zeitlimit";
+    document.getElementById("v-ipd").textContent = S.ipd;
+  }
+  document.querySelectorAll(".seg button").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var key = b.parentNode.dataset.key; S[key] = b.dataset.v;
+      if (key === "view") S.fov = FOV_DEFAULT[S.view];
+      save(); syncUI();
+    });
+  });
+  document.querySelectorAll("input[type=range]").forEach(function (r) {
+    r.addEventListener("input", function () { S[r.dataset.key] = +r.value; save(); syncUI(); });
+  });
+  syncUI();
+
+  // ---------- Ton ----------
+  var ac = null;
+  function audio() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (ac && ac.state === "suspended") ac.resume();
+    return ac;
+  }
+  function ping(f, t0, dur, vol) {
+    var o = ac.createOscillator(), g = ac.createGain();
+    o.type = "sine"; o.frequency.value = f;
+    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  function noise(t0, dur, vol, freq) {
+    var n = Math.floor(ac.sampleRate * dur), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+    var s = ac.createBufferSource(), flt = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = buf; flt.type = "bandpass"; flt.frequency.value = freq; flt.Q.value = 0.9; g.gain.value = vol;
+    s.connect(flt); flt.connect(g); g.connect(ac.destination); s.start(t0);
+  }
+  function soundCoin() {
+    if (!audio()) return; var t = ac.currentTime + 0.01;
+    ping(3100, t, 0.25, 0.18); ping(4650, t, 0.18, 0.08);
+    ping(2700, t + 0.11, 0.3, 0.12); ping(4050, t + 0.11, 0.2, 0.05);
+    noise(t + 0.32, 0.08, 0.9, 900); noise(t + 0.36, 0.12, 0.6, 400);
+  }
+  function soundClose() { if (!audio()) return; var t = ac.currentTime + 0.01; noise(t, 0.09, 1.0, 700); noise(t + 0.05, 0.14, 0.6, 300); }
+  function soundTick() { if (!ac || S.tick !== "on") return; noise(ac.currentTime + 0.005, 0.018, 0.25, 2600); }
+
+  // ---------- Lagesensor ----------
+  var ori = null, gotOri = false;
+  function onOri(e) { if (e.alpha == null && e.beta == null) return; ori = e; gotOri = true; }
+  function quatYXZ(x, y, z) {
+    var c1 = Math.cos(x / 2), c2 = Math.cos(y / 2), c3 = Math.cos(z / 2);
+    var s1 = Math.sin(x / 2), s2 = Math.sin(y / 2), s3 = Math.sin(z / 2);
+    return [s1 * c2 * c3 + c1 * s2 * s3, c1 * s2 * c3 - s1 * c2 * s3, c1 * c2 * s3 - s1 * s2 * c3, c1 * c2 * c3 + s1 * s2 * s3];
+  }
+  function qmul(a, b) {
+    return [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+  }
+  function qrot(q, v) {
+    var x = v[0], y = v[1], z = v[2], qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    var ix = qw * x + qy * z - qz * y, iy = qw * y + qz * x - qx * z, iz = qw * z + qx * y - qy * x, iw = -qx * x - qy * y - qz * z;
+    return [ix * qw + iw * -qx + iy * -qz - iz * -qy, iy * qw + iw * -qy + iz * -qx - ix * -qz, iz * qw + iw * -qz + ix * -qy - iy * -qx];
+  }
+  var D = Math.PI / 180, Q1 = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
+  function screenAngle() {
+    if (screen.orientation && typeof screen.orientation.angle === "number") return screen.orientation.angle;
+    return window.orientation || 0;
+  }
+  // Kopfhaltung: Gieren, Nicken, Rollen in Grad (Kamera = Rückseite des Handys)
+  function head() {
+    if (!ori) return null;
+    var q = quatYXZ((ori.beta || 0) * D, (ori.alpha || 0) * D, -(ori.gamma || 0) * D);
+    q = qmul(q, Q1);
+    var o = -screenAngle() * D;
+    q = qmul(q, [0, 0, Math.sin(o / 2), Math.cos(o / 2)]);
+    var f = qrot(q, [0, 0, -1]), u = qrot(q, [0, 1, 0]), r = qrot(q, [1, 0, 0]);
+    return { yaw: Math.atan2(-f[0], -f[2]) / D, pitch: Math.asin(Math.max(-1, Math.min(1, f[1]))) / D, roll: Math.atan2(-r[1], u[1]) / D };
+  }
+  function wrap(a) { while (a > 180) a -= 360; while (a < -180) a += 360; return a; }
+
+  // ---------- Zustand ----------
+  var cv = document.getElementById("c"), cx = cv.getContext("2d");
+  var W = 0, H = 0, DPR = 1;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 3);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  }
+  window.addEventListener("resize", resize); resize();
+
+  var state = "setup";          // setup | closed | opening | open | closing
+  var tOpen = 0, tState = 0, lastTick = 0;
+  var yaw0 = 0;                 // Gierwinkel beim Münzeinwurf
+  var look = { yaw: 0, pitch: 0, roll: 0 };   // relativ zum Start
+  var dragLook = { yaw: 0, pitch: 0 };
+  var drag = null, useDrag = false;
+  var debug = /debug/.test(location.search);
+
+  function insertCoin() {
+    soundCoin();
+    var h = head(); yaw0 = h ? h.yaw : 0;
+    dragLook.yaw = 0; dragLook.pitch = 0;
+    state = "opening"; tState = performance.now(); tOpen = tState + 650; lastTick = 0;
+  }
+  function onTap() { audio(); if (state === "closed") insertCoin(); }
+
+  cv.addEventListener("pointerdown", function (e) { drag = { x: e.clientX, y: e.clientY, yaw: dragLook.yaw, pitch: dragLook.pitch, moved: false }; });
+  cv.addEventListener("pointermove", function (e) {
+    if (!drag) return;
+    var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 8) drag.moved = true;
+    if (drag.moved && useDrag) {
+      var degPerPx = S.fov / eyeWidth();
+      dragLook.yaw = drag.yaw + dx * degPerPx;
+      dragLook.pitch = Math.max(-60, Math.min(60, drag.pitch + dy * degPerPx));
+    }
+  });
+  cv.addEventListener("pointerup", function () { if (drag && !drag.moved) onTap(); drag = null; });
+  cv.addEventListener("pointercancel", function () { drag = null; });
+
+  // ---------- Augen ----------
+  function eyes() {
+    if (S.view === "mono") return [{ x: W / 2, clip: [0, 0, W, H] }];
+    var ipdPx = S.ipd * 6.3;                          // ca. 6,3 CSS-Pixel je mm
+    return [{ x: W / 2 - ipdPx / 2, clip: [0, 0, W / 2, H] }, { x: W / 2 + ipdPx / 2, clip: [W / 2, 0, W / 2, H] }];
+  }
+  function scopeR() { return Math.min(W / 4, H / 2) * 0.86; }
+  function eyeWidth() {                               // Bildschirmbreite, über die sich das Sichtfeld spannt
+    if (S.view === "mono") return W;
+    if (S.view === "scope") return 2 * scopeR();
+    return W / 2;
+  }
+
+  // ---------- Zeichnen ----------
+  function drawScene(e, open) {
+    var ey = H / 2, c = e.clip;
+    cx.save();
+    cx.beginPath(); cx.rect(c[0], c[1], c[2], c[3]); cx.clip();
+    cx.fillStyle = "#050505"; cx.fillRect(c[0], c[1], c[2], c[3]);
+    var full = S.view === "scope" ? scopeR() : Math.hypot(c[2], c[3]);
+    var rr = full * open;
+    if (rr > 0.5 && pano) {
+      cx.beginPath(); cx.arc(e.x, ey, rr, 0, Math.PI * 2); cx.clip();
+      var k = eyeWidth() / S.fov;                     // Bildschirmpixel je Grad
+      var ppd = panoW / 360;                          // Panoramapixel je Grad
+      var s = k / ppd;
+      var xc = PANO.startU * panoW - look.yaw * ppd;  // Blickmitte im Panorama
+      xc = ((xc % panoW) + panoW) % panoW;
+      var yc = PANO.horizon * panoH - (look.pitch - S.tilt) * ppd;   // geradeaus schauen zeigt S.tilt Grad unter den Horizont
+      cx.translate(e.x, ey); cx.rotate(-look.roll * D); cx.scale(s, s);
+      var BIG = 1e5, top = -yc, bot = panoH - yc;
+      cx.fillStyle = PANO.sky; cx.fillRect(-BIG, -BIG, 2 * BIG, BIG + top + 2);
+      cx.fillStyle = PANO.ground; cx.fillRect(-BIG, bot - 2, 2 * BIG, BIG);
+      var half = (Math.hypot(W, H) / s);              // genug Kacheln für die sichtbare Breite
+      for (var x = -xc - panoW * Math.ceil(half / panoW + 1); x < half; x += panoW) {
+        if (x + panoW > -half) cx.drawImage(pano, x, top);
+      }
+      var fade = panoH * 0.06;                        // weicher Übergang am oberen und unteren Bildrand
+      var gt = cx.createLinearGradient(0, top, 0, top + fade);
+      gt.addColorStop(0, PANO.sky); gt.addColorStop(1, hexA(PANO.sky, 0));
+      cx.fillStyle = gt; cx.fillRect(-BIG, top, 2 * BIG, fade);
+      var gb = cx.createLinearGradient(0, bot - fade, 0, bot);
+      gb.addColorStop(0, hexA(PANO.ground, 0)); gb.addColorStop(1, PANO.ground);
+      cx.fillStyle = gb; cx.fillRect(-BIG, bot - fade, 2 * BIG, fade);
+      cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      // Linsenrand abdunkeln
+      var vr = S.view === "scope" ? scopeR() : Math.max(c[2], c[3]) * 0.62;
+      var g = cx.createRadialGradient(e.x, ey, vr * 0.55, e.x, ey, vr);
+      g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(0.8, "rgba(0,0,0,0.25)"); g.addColorStop(1, "rgba(0,0,0,0.9)");
+      cx.fillStyle = g; cx.fillRect(c[0], c[1], c[2], c[3]);
+    }
+    cx.restore();
+    if (S.view === "scope") {
+      cx.beginPath(); cx.arc(e.x, ey, scopeR() + 1.5, 0, Math.PI * 2);
+      cx.strokeStyle = "#1c1c1c"; cx.lineWidth = 3; cx.stroke();
+    }
+    if (state === "closed") {
+      cx.fillStyle = "#777"; cx.textAlign = "center"; cx.textBaseline = "middle";
+      var fs = Math.min(eyeWidth(), H) * 0.055;
+      cx.font = Math.round(fs) + "px -apple-system, Roboto, sans-serif";
+      cx.fillText("Münze einwerfen", e.x, ey - fs * 0.5);
+      cx.fillStyle = "#555"; cx.font = Math.round(fs * 0.7) + "px -apple-system, Roboto, sans-serif";
+      cx.fillText(useDrag ? "tippen · dann mit dem Finger umschauen" : "tippen", e.x, ey + fs);
+    }
+  }
+  function hexA(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return "rgba(" + (n >> 16 & 255) + "," + (n >> 8 & 255) + "," + (n & 255) + "," + a + ")";
+  }
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (state === "setup") return;
+
+    var h = useDrag ? null : head();
+    if (h) {
+      // Gieren positiv = nach links. Kaum Glättung, VR braucht wenig Verzögerung.
+      var ty = wrap(h.yaw - yaw0);
+      look.yaw += wrap(ty - look.yaw) * 0.6; look.pitch += (h.pitch - look.pitch) * 0.6; look.roll += (h.roll - look.roll) * 0.6;
+    } else {
+      look.yaw = dragLook.yaw; look.pitch = dragLook.pitch; look.roll = 0;
+    }
+
+    var open = 0;
+    if (state === "opening") {
+      open = Math.min(1, (now - tState) / 650); open = 1 - Math.pow(1 - open, 3);
+      if (open >= 1) { state = "open"; tState = now; }
+    } else if (state === "open") {
+      open = 1;
+      var t = (now - tOpen) / 1000;
+      if (S.dur > 0) {
+        if (t - lastTick >= 0.5) { lastTick = Math.floor(t * 2) / 2; soundTick(); }
+        if (t >= S.dur) { state = "closing"; tState = now; soundClose(); }
+      }
+    } else if (state === "closing") {
+      open = 1 - Math.min(1, (now - tState) / 450);
+      if (open <= 0) state = "closed";
+    }
+
+    cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    cx.fillStyle = "#000"; cx.fillRect(0, 0, W, H);
+    eyes().forEach(function (e) { drawScene(e, open); });
+
+    if (debug) {
+      document.getElementById("dbg").textContent = state + " | Sensor " + (gotOri ? "ja" : "nein") + (useDrag ? " (Finger)" : "") +
+        " | yaw " + look.yaw.toFixed(1) + " pitch " + look.pitch.toFixed(1) + " roll " + look.roll.toFixed(1);
+    }
+  }
+  requestAnimationFrame(frame);
+
+  // ---------- Start ----------
+  var setup = document.getElementById("setup"), gear = document.getElementById("gear");
+  document.getElementById("go").addEventListener("click", function () {
+    if (!pano) { statusEl.textContent = "Panorama fehlt noch."; statusEl.className = "err"; return; }
+    audio();
+    var askPerm = (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function")
+      ? DeviceOrientationEvent.requestPermission().catch(function () { return "denied"; })
+      : Promise.resolve("granted");
+    askPerm.then(function () {
+      window.addEventListener("deviceorientation", onOri);
+      setTimeout(function () { useDrag = !gotOri; }, 1200);
+    });
+    try { var el = document.documentElement; var p = (el.requestFullscreen || el.webkitRequestFullscreen).call(el); if (p && p.catch) p.catch(function () {}); } catch (e) {}
+    try { screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape").catch(function () {}); } catch (e) {}
+    try { navigator.wakeLock && navigator.wakeLock.request("screen").catch(function () {}); } catch (e) {}
+    setup.style.display = "none"; gear.style.display = "block";
+    document.body.classList.add("running");
+    document.body.classList.toggle("cb", S.view !== "mono");
+    state = "closed";
+  });
+  gear.addEventListener("click", function () {
+    state = "setup"; setup.style.display = "block"; gear.style.display = "none";
+    document.body.classList.remove("running");
+    cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = "#000"; cx.fillRect(0, 0, cv.width, cv.height);
+  });
+})();
+</script>
+</body>
+</html>
