@@ -11,7 +11,7 @@
   html, body { margin: 0; height: 100%; background: #000; color: #eee; overflow: hidden;
     font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     -webkit-user-select: none; user-select: none; touch-action: none; }
-  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   #setup { position: fixed; inset: 0; overflow: auto; background: #111; padding: 22px 22px 40px;
     padding-left: max(22px, env(safe-area-inset-left)); padding-right: max(22px, env(safe-area-inset-right));
     touch-action: pan-y; }
@@ -225,10 +225,17 @@
   var W = 0, H = 0, DPR = 1;
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, 3);
-    W = window.innerWidth; H = window.innerHeight;
+    // Maße aus der tatsächlich angezeigten Fläche: iOS meldet beim Drehen innerWidth/innerHeight oft verspätet,
+    // dann passt das Seitenverhältnis der Zeichenfläche nicht zur Anzeige und das Bild wird verzerrt.
+    W = cv.clientWidth || window.innerWidth; H = cv.clientHeight || window.innerHeight;
     cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   }
-  window.addEventListener("resize", resize); resize();
+  window.addEventListener("resize", resize); window.addEventListener("orientationchange", function () { setTimeout(resize, 300); });
+  resize();
+  function checkSize() {                              // jede Bildfolge prüfen, ob Zeichenfläche und Anzeige noch zusammenpassen
+    var dpr = Math.min(window.devicePixelRatio || 1, 3);
+    if (cv.clientWidth !== W || cv.clientHeight !== H || dpr !== DPR) resize();
+  }
 
   var state = "setup";          // setup | opening | open
   var tState = 0;
@@ -346,6 +353,7 @@
   function frame(now) {
     requestAnimationFrame(frame);
     if (state === "setup") return;
+    checkSize();
 
     var h = useDrag ? null : head();
     if (h && needCenter) { yaw0 = h.yaw; needCenter = false; }   // Höhe bleibt absolut: Handy senkrecht = Bildmitte
@@ -368,7 +376,7 @@
     eyes().forEach(function (e) { drawScene(e, open); });
 
     if (debug) {
-      document.getElementById("dbg").textContent = state + " | Sensor " + (gotOri ? "ja" : "nein") + (useDrag ? " (Finger)" : "") +
+      document.getElementById("dbg").textContent = state + " | " + W + "×" + H + " @" + DPR + " Winkel " + screenAngle() + " | Sensor " + (gotOri ? "ja" : "nein") + (useDrag ? " (Finger)" : "") +
         " | yaw " + look.yaw.toFixed(1) + " pitch " + look.pitch.toFixed(1) + " roll " + look.roll.toFixed(1);
     }
   }
