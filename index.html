@@ -348,7 +348,7 @@
     if (state === "setup") return;
 
     var h = useDrag ? null : head();
-    if (h && needCenter) { yaw0 = h.yaw; pitch0 = h.pitch; needCenter = false; }
+    if (h && needCenter) { yaw0 = h.yaw; needCenter = false; }   // Höhe bleibt absolut: Handy senkrecht = Bildmitte
     if (h) {
       // Gieren positiv = nach links. Kaum Glättung, VR braucht wenig Verzögerung.
       var ty = wrap(h.yaw - yaw0);
@@ -395,7 +395,7 @@
     setup.style.display = "none"; gear.style.display = "block";
     document.body.classList.add("running");
     document.body.classList.toggle("cb", !single());
-    needCenter = true; dragLook.yaw = 0; dragLook.pitch = 0;
+    needCenter = true; pitch0 = 0; dragLook.yaw = 0; dragLook.pitch = 0;
     state = "opening"; tState = performance.now();
   });
   gear.addEventListener("click", function () {
