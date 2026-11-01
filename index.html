@@ -51,6 +51,13 @@
 
   <div class="grid">
     <div class="row">
+      <label class="t">Inhalt</label>
+      <div class="seg" data-key="src">
+        <button data-v="video">Video (10 s, Ausschnitt)</button>
+        <button data-v="pano">Panorama 360° (Standbild)</button>
+      </div>
+    </div>
+    <div class="row">
       <label class="t">Ansicht</label>
       <div class="seg" data-key="view">
         <button data-v="vr">VR (Cardboard)</button>
@@ -64,7 +71,7 @@
       <input type="range" min="15" max="110" step="1" data-key="fov">
     </div>
     <div class="row">
-      <label class="t">Blick nach unten geneigt: <span class="val" id="v-tilt"></span>°</label>
+      <label class="t">Blick nach unten geneigt (nur Panorama): <span class="val" id="v-tilt"></span>°</label>
       <input type="range" min="0" max="40" step="1" data-key="tilt">
     </div>
     <div class="row">
@@ -91,6 +98,18 @@
     sky: "#e7e7ea", ground: "#c49b70"
   };
   var MAX_W = 6144, MAX_PX = 15.5e6;   // Grenzen für iOS-Canvas
+
+  // Video: 10-s-Schleife aus dem Wettbewerbsbild, normales Seitenverhältnis, man schaut sich darin um.
+  var VIDEO = {
+    src: ["bilder/video.mp4", "https://v3b.fal.media/files/b/0ab0b793/L5YsTvt6eAb2ZYqtXdA0D_output.mp4"],
+    hfov: 64               // angenommener Bildwinkel des Videos (horizontal, Grad)
+  };
+  var vid = document.createElement("video"), vidReady = false, vidIdx = 0;
+  vid.muted = true; vid.defaultMuted = true; vid.loop = true; vid.playsInline = true; vid.preload = "auto";
+  vid.setAttribute("muted", ""); vid.setAttribute("playsinline", ""); vid.setAttribute("webkit-playsinline", "");
+  vid.addEventListener("loadeddata", function () { vidReady = true; showStatus(); });
+  vid.addEventListener("error", function () { vidIdx++; if (vidIdx < VIDEO.src.length) vid.src = VIDEO.src[vidIdx]; else showStatus(); });
+  vid.src = VIDEO.src[0];
 
   var pano = null, panoW = 0, panoH = 0;   // nahtloses Panorama (Canvas)
   var statusEl = document.getElementById("status");
@@ -123,35 +142,45 @@
     }
     pano = c;
   }
+  var panoInfo = "lädt …";
+  function showStatus() {
+    statusEl.textContent = "Video: " + (vidReady ? vid.videoWidth + " × " + vid.videoHeight + " px" : (vidIdx >= VIDEO.src.length ? "nicht ladbar" : "lädt …")) +
+      " · Panorama: " + panoInfo;
+    statusEl.className = (S.src === "video" ? vidReady : !!pano) ? "" : "err";
+  }
   loadFirst(PANO.src, 0, function (im) {
-    if (!im) { statusEl.textContent = "Panorama konnte nicht geladen werden."; statusEl.className = "err"; return; }
+    if (!im) { panoInfo = "nicht ladbar"; showStatus(); return; }
     buildPano(im);
-    statusEl.textContent = "Panorama: " + im.naturalWidth + " × " + im.naturalHeight + " px" + (im.naturalWidth < 2000 ? " (nur Vorschau, unscharf)" : "");
+    panoInfo = im.naturalWidth + " × " + im.naturalHeight + " px" + (im.naturalWidth < 2000 ? " (nur Vorschau, unscharf)" : "");
+    showStatus();
   });
 
   // ---------- Einstellungen ----------
   var FOV_DEFAULT = { vr: 85, scope: 28, mono: 70, round: 40 };
-  var S = { view: "vr", fov: 85, tilt: 15, ipd: 62 };
+  var FOV_DEFAULT_V = { vr: 45, scope: 24, mono: 40, round: 30 };   // Video: enger, damit Raum zum Umschauen bleibt
+  var S = { src: "video", view: "vr", fov: 85, fovV: 45, tilt: 15, ipd: 62 };
+  function fovKey() { return S.src === "video" ? "fovV" : "fov"; }
+  function fov() { return S[fovKey()]; }
   try { var saved = JSON.parse(localStorage.getItem("fernrohr2") || "{}"); for (var k in saved) if (k in S) S[k] = saved[k]; } catch (e) {}
   function save() { try { localStorage.setItem("fernrohr2", JSON.stringify(S)); } catch (e) {} }
   function syncUI() {
     document.querySelectorAll(".seg").forEach(function (seg) {
       seg.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b.dataset.v === S[seg.dataset.key]); });
     });
-    document.querySelectorAll("input[type=range]").forEach(function (r) { r.value = S[r.dataset.key]; });
-    document.getElementById("v-fov").textContent = S.fov;
+    document.querySelectorAll("input[type=range]").forEach(function (r) { r.value = r.dataset.key === "fov" ? fov() : S[r.dataset.key]; });
+    document.getElementById("v-fov").textContent = fov();
     document.getElementById("v-tilt").textContent = S.tilt;
     document.getElementById("v-ipd").textContent = S.ipd;
   }
   document.querySelectorAll(".seg button").forEach(function (b) {
     b.addEventListener("click", function () {
       var key = b.parentNode.dataset.key; S[key] = b.dataset.v;
-      if (key === "view") S.fov = FOV_DEFAULT[S.view];
-      save(); syncUI();
+      if (key === "view") { S.fov = FOV_DEFAULT[S.view]; S.fovV = FOV_DEFAULT_V[S.view]; }
+      save(); syncUI(); showStatus();
     });
   });
   document.querySelectorAll("input[type=range]").forEach(function (r) {
-    r.addEventListener("input", function () { S[r.dataset.key] = +r.value; save(); syncUI(); });
+    r.addEventListener("input", function () { S[r.dataset.key === "fov" ? fovKey() : r.dataset.key] = +r.value; save(); syncUI(); });
   });
   syncUI();
 
@@ -203,14 +232,14 @@
 
   var state = "setup";          // setup | opening | open
   var tState = 0;
-  var yaw0 = 0, needCenter = true;   // Gierwinkel, der „geradeaus auf die Piste“ bedeutet
+  var yaw0 = 0, pitch0 = 0, needCenter = true;   // Gierwinkel, der „geradeaus auf die Piste“ bedeutet
   var look = { yaw: 0, pitch: 0, roll: 0 };   // relativ zum Start
   var dragLook = { yaw: 0, pitch: 0 };
   var drag = null, useDrag = false;
   var debug = /debug/.test(location.search);
 
   function recenter() {
-    var h = head(); if (h) { yaw0 = h.yaw; needCenter = false; } else needCenter = true;
+    var h = head(); if (h) { yaw0 = h.yaw; pitch0 = h.pitch; needCenter = false; } else needCenter = true;
     dragLook.yaw = 0; dragLook.pitch = 0;
   }
   function onTap() { if (state === "open" || state === "opening") recenter(); }
@@ -221,7 +250,7 @@
     var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 8) drag.moved = true;
     if (drag.moved && useDrag) {
-      var degPerPx = S.fov / eyeWidth();
+      var degPerPx = fov() / eyeWidth();
       dragLook.yaw = drag.yaw + dx * degPerPx;
       dragLook.pitch = Math.max(-60, Math.min(60, drag.pitch + dy * degPerPx));
     }
@@ -252,9 +281,42 @@
     cx.fillStyle = "#050505"; cx.fillRect(c[0], c[1], c[2], c[3]);
     var full = round() ? circR() : Math.hypot(c[2], c[3]);
     var rr = full * open;
-    if (rr > 0.5 && pano) {
+    var useVid = S.src === "video" && vidReady;
+    if (rr > 0.5 && (useVid || pano)) {
       cx.beginPath(); cx.arc(e.x, ey, rr, 0, Math.PI * 2); cx.clip();
-      var k = eyeWidth() / S.fov;                     // Bildschirmpixel je Grad
+      if (useVid) drawVideo(e, ey, c); else drawPano(e, ey);
+      cx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      // Linsenrand abdunkeln
+      var vr = round() ? circR() : Math.max(c[2], c[3]) * 0.62;
+      var g = cx.createRadialGradient(e.x, ey, vr * 0.55, e.x, ey, vr);
+      g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(0.8, "rgba(0,0,0,0.25)"); g.addColorStop(1, "rgba(0,0,0,0.9)");
+      cx.fillStyle = g; cx.fillRect(c[0], c[1], c[2], c[3]);
+    }
+    cx.restore();
+    if (round()) {
+      cx.beginPath(); cx.arc(e.x, ey, circR() + 1.5, 0, Math.PI * 2);
+      cx.strokeStyle = "#1c1c1c"; cx.lineWidth = 3; cx.stroke();
+    }
+  }
+
+  // Video: flaches Bild mit Anschlag an den Rändern
+  function drawVideo(e, ey, c) {
+    var vw = vid.videoWidth, vh = vid.videoHeight;
+    var hx = round() ? circR() : c[2] / 2 + Math.abs(e.x - (c[0] + c[2] / 2));   // halbe sichtbare Breite
+    var hy = round() ? circR() : c[3] / 2;
+    var k = eyeWidth() / fov();                       // Bildschirmpixel je Grad
+    var s = Math.max(k / (vw / VIDEO.hfov), 2 * hx / vw, 2 * hy / vh);   // mindestens bildfüllend
+    var vpd = k / s;                                  // Videopixel je Grad Kopfdrehung
+    var xc = vw / 2 - look.yaw * vpd, yc = vh / 2 - (look.pitch - (useDrag ? 0 : pitch0)) * vpd;
+    xc = Math.max(hx / s, Math.min(vw - hx / s, xc));
+    yc = Math.max(hy / s, Math.min(vh - hy / s, yc));
+    cx.translate(e.x, ey); cx.rotate(-look.roll * D); cx.scale(s, s);
+    cx.drawImage(vid, -xc, -yc);
+  }
+
+  // Panorama: 360° rundum
+  function drawPano(e, ey) {
+      var k = eyeWidth() / fov();                     // Bildschirmpixel je Grad
       var ppd = panoW / 360;                          // Panoramapixel je Grad
       var s = k / ppd;
       var xc = PANO.startU * panoW - look.yaw * ppd;  // Blickmitte im Panorama
@@ -275,18 +337,6 @@
       var gb = cx.createLinearGradient(0, bot - fade, 0, bot);
       gb.addColorStop(0, hexA(PANO.ground, 0)); gb.addColorStop(1, PANO.ground);
       cx.fillStyle = gb; cx.fillRect(-BIG, bot - fade, 2 * BIG, fade);
-      cx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      // Linsenrand abdunkeln
-      var vr = round() ? circR() : Math.max(c[2], c[3]) * 0.62;
-      var g = cx.createRadialGradient(e.x, ey, vr * 0.55, e.x, ey, vr);
-      g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(0.8, "rgba(0,0,0,0.25)"); g.addColorStop(1, "rgba(0,0,0,0.9)");
-      cx.fillStyle = g; cx.fillRect(c[0], c[1], c[2], c[3]);
-    }
-    cx.restore();
-    if (round()) {
-      cx.beginPath(); cx.arc(e.x, ey, circR() + 1.5, 0, Math.PI * 2);
-      cx.strokeStyle = "#1c1c1c"; cx.lineWidth = 3; cx.stroke();
-    }
   }
   function hexA(hex, a) {
     var n = parseInt(hex.slice(1), 16);
@@ -298,7 +348,7 @@
     if (state === "setup") return;
 
     var h = useDrag ? null : head();
-    if (h && needCenter) { yaw0 = h.yaw; needCenter = false; }
+    if (h && needCenter) { yaw0 = h.yaw; pitch0 = h.pitch; needCenter = false; }
     if (h) {
       // Gieren positiv = nach links. Kaum Glättung, VR braucht wenig Verzögerung.
       var ty = wrap(h.yaw - yaw0);
@@ -327,7 +377,8 @@
   // ---------- Start ----------
   var setup = document.getElementById("setup"), gear = document.getElementById("gear");
   document.getElementById("go").addEventListener("click", function () {
-    if (!pano) { statusEl.textContent = "Panorama fehlt noch."; statusEl.className = "err"; return; }
+    if (S.src === "pano" && !pano) { statusEl.textContent = "Panorama lädt noch."; statusEl.className = "err"; return; }
+    try { var pp = vid.play(); if (pp && pp.catch) pp.catch(function () {}); } catch (e) {}
     var askPerm = (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function")
       ? DeviceOrientationEvent.requestPermission().catch(function () { return "denied"; })
       : Promise.resolve("granted");

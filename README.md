@@ -4,7 +4,8 @@ Prototyp für ein Fernrohr vor einem Solarpark: Handy ins Cardboard oder als Ein
 
 Öffnen am Handy: https://grafikfritz.github.io/fernrohr/
 
-- Das Panorama lädt in voller Auflösung von fal. Fällt das aus, springt `bilder/pano-vorschau.webp` ein (unscharf). Eine eigene Datei `bilder/pano.jpg` hat Vorrang.
+- Inhalt wählbar: Video (10-s-Schleife aus dem Wettbewerbsbild, 1920 × 1080, man schaut sich im Ausschnitt um) oder Panorama 360° (Standbild).
+- Video und Panorama laden in voller Auflösung von fal. Fällt das aus, springt `bilder/pano-vorschau.webp` ein (unscharf). Eine eigene Datei `bilder/pano.jpg` hat Vorrang.
 - Parameter des Panoramas (Naht, Horizonthöhe, Startrichtung, Himmels- und Bodenfarbe) stehen oben im Skript unter `PANO`.
 - `?debug` an die Adresse hängen zeigt Sensorwerte.
 
