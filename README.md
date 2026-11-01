@@ -1,6 +1,6 @@
 # Fernrohr · Test
 
-Prototyp für ein Münzfernrohr vor einem Solarpark: Handy ins Cardboard, Münze einwerfen (tippen), dann rundum im 360°-Panorama der fiktiven Kunstinstallation »Saison« umschauen.
+Prototyp für ein Fernrohr vor einem Solarpark: Handy ins Cardboard oder als Einzelbild vor sich halten und sich rundum im 360°-Panorama der fiktiven Kunstinstallation »Saison« umschauen. Antippen richtet den Blick wieder auf die Piste aus. Ansichten: VR (Cardboard), Fernrohr mit zwei Kreisen (Cardboard), Einzelbild, Einzelbild rund.
 
 Öffnen am Handy: https://grafikfritz.github.io/fernrohr/
 

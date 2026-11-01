@@ -33,6 +33,8 @@
   #rotate { position: fixed; inset: 0; background: #000; display: none; align-items: center; justify-content: center;
     text-align: center; padding: 30px; color: #bbb; z-index: 6; }
   @media (orientation: portrait) { body.running.cb #rotate { display: flex; } }
+  #hint { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: rgba(0,0,0,0.6); color: #ddd;
+    padding: 8px 14px; border-radius: 8px; font-size: 14px; display: none; z-index: 6; pointer-events: none; }
   #dbg { position: fixed; left: 52px; bottom: 6px; font: 11px/1.3 ui-monospace, monospace; color: #6c6; z-index: 7; pointer-events: none; }
 </style>
 </head>
@@ -41,10 +43,11 @@
 <button id="gear" aria-label="Einstellungen">⚙</button>
 <div id="rotate">Handy quer halten<br>und ins Cardboard stecken.</div>
 <div id="dbg"></div>
+<div id="hint">Kein Lagesensor: mit dem Finger umschauen</div>
 
 <div id="setup">
   <h1>Fernrohr · Test</h1>
-  <p>Handy quer ins Cardboard. Tippen (oder Cardboard-Taste) wirft die Münze ein, dann kannst du dich rundum umschauen. Nach Ablauf schließt die Blende, nochmal tippen startet neu.</p>
+  <p>Nach „Start“ öffnet sich der Blick. Kopf oder Handy drehen, um dich rundum umzuschauen. Tippen (oder die Cardboard-Taste) richtet den Blick wieder auf die Piste aus.</p>
 
   <div class="grid">
     <div class="row">
@@ -52,7 +55,8 @@
       <div class="seg" data-key="view">
         <button data-v="vr">VR (Cardboard)</button>
         <button data-v="scope">Fernrohr (Cardboard, Kreise)</button>
-        <button data-v="mono">Ohne Cardboard</button>
+        <button data-v="mono">Einzelbild</button>
+        <button data-v="round">Einzelbild, rund</button>
       </div>
     </div>
     <div class="row">
@@ -64,19 +68,8 @@
       <input type="range" min="0" max="40" step="1" data-key="tilt">
     </div>
     <div class="row">
-      <label class="t">Blickdauer: <span class="val" id="v-dur"></span></label>
-      <input type="range" min="0" max="180" step="10" data-key="dur">
-    </div>
-    <div class="row">
       <label class="t">Augenabstand: <span class="val" id="v-ipd"></span> mm</label>
       <input type="range" min="52" max="74" step="1" data-key="ipd">
-    </div>
-    <div class="row">
-      <label class="t">Ticken des Zeitwerks</label>
-      <div class="seg" data-key="tick">
-        <button data-v="on">an</button>
-        <button data-v="off">aus</button>
-      </div>
     </div>
   </div>
 
@@ -94,7 +87,7 @@
     src: ["bilder/pano.jpg", "https://v3b.fal.media/files/b/0ab071ae/HZmIFjzX_gEPYExV5FTJN_O1L7p5Mk.jpg", "bilder/pano-vorschau.webp"],
     seam: 0.04,        // Anteil der Bildbreite, der an der Naht überblendet wird (0 = Bild ist nahtlos)
     horizon: 0.16,  // Höhe des Horizonts im Bild (0 oben, 1 unten)
-    startU: 0.55,    // wohin man beim Münzeinwurf schaut (0..1 über die Bildbreite)
+    startU: 0.55,    // wohin man beim Start schaut (0..1 über die Bildbreite)
     sky: "#e7e7ea", ground: "#c49b70"
   };
   var MAX_W = 6144, MAX_PX = 15.5e6;   // Grenzen für iOS-Canvas
@@ -137,8 +130,8 @@
   });
 
   // ---------- Einstellungen ----------
-  var FOV_DEFAULT = { vr: 85, scope: 28, mono: 70 };
-  var S = { view: "vr", fov: 85, tilt: 15, dur: 90, ipd: 62, tick: "on" };
+  var FOV_DEFAULT = { vr: 85, scope: 28, mono: 70, round: 40 };
+  var S = { view: "vr", fov: 85, tilt: 15, ipd: 62 };
   try { var saved = JSON.parse(localStorage.getItem("fernrohr2") || "{}"); for (var k in saved) if (k in S) S[k] = saved[k]; } catch (e) {}
   function save() { try { localStorage.setItem("fernrohr2", JSON.stringify(S)); } catch (e) {} }
   function syncUI() {
@@ -148,7 +141,6 @@
     document.querySelectorAll("input[type=range]").forEach(function (r) { r.value = S[r.dataset.key]; });
     document.getElementById("v-fov").textContent = S.fov;
     document.getElementById("v-tilt").textContent = S.tilt;
-    document.getElementById("v-dur").textContent = S.dur ? S.dur + " s" : "ohne Zeitlimit";
     document.getElementById("v-ipd").textContent = S.ipd;
   }
   document.querySelectorAll(".seg button").forEach(function (b) {
@@ -162,35 +154,6 @@
     r.addEventListener("input", function () { S[r.dataset.key] = +r.value; save(); syncUI(); });
   });
   syncUI();
-
-  // ---------- Ton ----------
-  var ac = null;
-  function audio() {
-    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
-    if (ac && ac.state === "suspended") ac.resume();
-    return ac;
-  }
-  function ping(f, t0, dur, vol) {
-    var o = ac.createOscillator(), g = ac.createGain();
-    o.type = "sine"; o.frequency.value = f;
-    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + dur + 0.02);
-  }
-  function noise(t0, dur, vol, freq) {
-    var n = Math.floor(ac.sampleRate * dur), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
-    for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
-    var s = ac.createBufferSource(), flt = ac.createBiquadFilter(), g = ac.createGain();
-    s.buffer = buf; flt.type = "bandpass"; flt.frequency.value = freq; flt.Q.value = 0.9; g.gain.value = vol;
-    s.connect(flt); flt.connect(g); g.connect(ac.destination); s.start(t0);
-  }
-  function soundCoin() {
-    if (!audio()) return; var t = ac.currentTime + 0.01;
-    ping(3100, t, 0.25, 0.18); ping(4650, t, 0.18, 0.08);
-    ping(2700, t + 0.11, 0.3, 0.12); ping(4050, t + 0.11, 0.2, 0.05);
-    noise(t + 0.32, 0.08, 0.9, 900); noise(t + 0.36, 0.12, 0.6, 400);
-  }
-  function soundClose() { if (!audio()) return; var t = ac.currentTime + 0.01; noise(t, 0.09, 1.0, 700); noise(t + 0.05, 0.14, 0.6, 300); }
-  function soundTick() { if (!ac || S.tick !== "on") return; noise(ac.currentTime + 0.005, 0.018, 0.25, 2600); }
 
   // ---------- Lagesensor ----------
   var ori = null, gotOri = false;
@@ -238,21 +201,19 @@
   }
   window.addEventListener("resize", resize); resize();
 
-  var state = "setup";          // setup | closed | opening | open | closing
-  var tOpen = 0, tState = 0, lastTick = 0;
-  var yaw0 = 0;                 // Gierwinkel beim Münzeinwurf
+  var state = "setup";          // setup | opening | open
+  var tState = 0;
+  var yaw0 = 0, needCenter = true;   // Gierwinkel, der „geradeaus auf die Piste“ bedeutet
   var look = { yaw: 0, pitch: 0, roll: 0 };   // relativ zum Start
   var dragLook = { yaw: 0, pitch: 0 };
   var drag = null, useDrag = false;
   var debug = /debug/.test(location.search);
 
-  function insertCoin() {
-    soundCoin();
-    var h = head(); yaw0 = h ? h.yaw : 0;
+  function recenter() {
+    var h = head(); if (h) { yaw0 = h.yaw; needCenter = false; } else needCenter = true;
     dragLook.yaw = 0; dragLook.pitch = 0;
-    state = "opening"; tState = performance.now(); tOpen = tState + 650; lastTick = 0;
   }
-  function onTap() { audio(); if (state === "closed") insertCoin(); }
+  function onTap() { if (state === "open" || state === "opening") recenter(); }
 
   cv.addEventListener("pointerdown", function (e) { drag = { x: e.clientX, y: e.clientY, yaw: dragLook.yaw, pitch: dragLook.pitch, moved: false }; });
   cv.addEventListener("pointermove", function (e) {
@@ -269,15 +230,17 @@
   cv.addEventListener("pointercancel", function () { drag = null; });
 
   // ---------- Augen ----------
+  function single() { return S.view === "mono" || S.view === "round"; }
+  function round() { return S.view === "scope" || S.view === "round"; }
   function eyes() {
-    if (S.view === "mono") return [{ x: W / 2, clip: [0, 0, W, H] }];
+    if (single()) return [{ x: W / 2, clip: [0, 0, W, H] }];
     var ipdPx = S.ipd * 6.3;                          // ca. 6,3 CSS-Pixel je mm
     return [{ x: W / 2 - ipdPx / 2, clip: [0, 0, W / 2, H] }, { x: W / 2 + ipdPx / 2, clip: [W / 2, 0, W / 2, H] }];
   }
-  function scopeR() { return Math.min(W / 4, H / 2) * 0.86; }
+  function circR() { return S.view === "round" ? Math.min(W, H) * 0.46 : Math.min(W / 4, H / 2) * 0.86; }
   function eyeWidth() {                               // Bildschirmbreite, über die sich das Sichtfeld spannt
+    if (round()) return 2 * circR();
     if (S.view === "mono") return W;
-    if (S.view === "scope") return 2 * scopeR();
     return W / 2;
   }
 
@@ -287,7 +250,7 @@
     cx.save();
     cx.beginPath(); cx.rect(c[0], c[1], c[2], c[3]); cx.clip();
     cx.fillStyle = "#050505"; cx.fillRect(c[0], c[1], c[2], c[3]);
-    var full = S.view === "scope" ? scopeR() : Math.hypot(c[2], c[3]);
+    var full = round() ? circR() : Math.hypot(c[2], c[3]);
     var rr = full * open;
     if (rr > 0.5 && pano) {
       cx.beginPath(); cx.arc(e.x, ey, rr, 0, Math.PI * 2); cx.clip();
@@ -314,23 +277,15 @@
       cx.fillStyle = gb; cx.fillRect(-BIG, bot - fade, 2 * BIG, fade);
       cx.setTransform(DPR, 0, 0, DPR, 0, 0);
       // Linsenrand abdunkeln
-      var vr = S.view === "scope" ? scopeR() : Math.max(c[2], c[3]) * 0.62;
+      var vr = round() ? circR() : Math.max(c[2], c[3]) * 0.62;
       var g = cx.createRadialGradient(e.x, ey, vr * 0.55, e.x, ey, vr);
       g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(0.8, "rgba(0,0,0,0.25)"); g.addColorStop(1, "rgba(0,0,0,0.9)");
       cx.fillStyle = g; cx.fillRect(c[0], c[1], c[2], c[3]);
     }
     cx.restore();
-    if (S.view === "scope") {
-      cx.beginPath(); cx.arc(e.x, ey, scopeR() + 1.5, 0, Math.PI * 2);
+    if (round()) {
+      cx.beginPath(); cx.arc(e.x, ey, circR() + 1.5, 0, Math.PI * 2);
       cx.strokeStyle = "#1c1c1c"; cx.lineWidth = 3; cx.stroke();
-    }
-    if (state === "closed") {
-      cx.fillStyle = "#777"; cx.textAlign = "center"; cx.textBaseline = "middle";
-      var fs = Math.min(eyeWidth(), H) * 0.055;
-      cx.font = Math.round(fs) + "px -apple-system, Roboto, sans-serif";
-      cx.fillText("Münze einwerfen", e.x, ey - fs * 0.5);
-      cx.fillStyle = "#555"; cx.font = Math.round(fs * 0.7) + "px -apple-system, Roboto, sans-serif";
-      cx.fillText(useDrag ? "tippen · dann mit dem Finger umschauen" : "tippen", e.x, ey + fs);
     }
   }
   function hexA(hex, a) {
@@ -343,6 +298,7 @@
     if (state === "setup") return;
 
     var h = useDrag ? null : head();
+    if (h && needCenter) { yaw0 = h.yaw; needCenter = false; }
     if (h) {
       // Gieren positiv = nach links. Kaum Glättung, VR braucht wenig Verzögerung.
       var ty = wrap(h.yaw - yaw0);
@@ -351,20 +307,10 @@
       look.yaw = dragLook.yaw; look.pitch = dragLook.pitch; look.roll = 0;
     }
 
-    var open = 0;
+    var open = 1;
     if (state === "opening") {
       open = Math.min(1, (now - tState) / 650); open = 1 - Math.pow(1 - open, 3);
-      if (open >= 1) { state = "open"; tState = now; }
-    } else if (state === "open") {
-      open = 1;
-      var t = (now - tOpen) / 1000;
-      if (S.dur > 0) {
-        if (t - lastTick >= 0.5) { lastTick = Math.floor(t * 2) / 2; soundTick(); }
-        if (t >= S.dur) { state = "closing"; tState = now; soundClose(); }
-      }
-    } else if (state === "closing") {
-      open = 1 - Math.min(1, (now - tState) / 450);
-      if (open <= 0) state = "closed";
+      if (open >= 1) state = "open";
     }
 
     cx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -382,21 +328,24 @@
   var setup = document.getElementById("setup"), gear = document.getElementById("gear");
   document.getElementById("go").addEventListener("click", function () {
     if (!pano) { statusEl.textContent = "Panorama fehlt noch."; statusEl.className = "err"; return; }
-    audio();
     var askPerm = (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === "function")
       ? DeviceOrientationEvent.requestPermission().catch(function () { return "denied"; })
       : Promise.resolve("granted");
     askPerm.then(function () {
       window.addEventListener("deviceorientation", onOri);
-      setTimeout(function () { useDrag = !gotOri; }, 1200);
+      setTimeout(function () {
+        useDrag = !gotOri;
+        if (useDrag) { var hn = document.getElementById("hint"); hn.style.display = "block"; setTimeout(function () { hn.style.display = "none"; }, 4000); }
+      }, 1200);
     });
     try { var el = document.documentElement; var p = (el.requestFullscreen || el.webkitRequestFullscreen).call(el); if (p && p.catch) p.catch(function () {}); } catch (e) {}
     try { screen.orientation && screen.orientation.lock && screen.orientation.lock("landscape").catch(function () {}); } catch (e) {}
     try { navigator.wakeLock && navigator.wakeLock.request("screen").catch(function () {}); } catch (e) {}
     setup.style.display = "none"; gear.style.display = "block";
     document.body.classList.add("running");
-    document.body.classList.toggle("cb", S.view !== "mono");
-    state = "closed";
+    document.body.classList.toggle("cb", !single());
+    needCenter = true; dragLook.yaw = 0; dragLook.pitch = 0;
+    state = "opening"; tState = performance.now();
   });
   gear.addEventListener("click", function () {
     state = "setup"; setup.style.display = "block"; gear.style.display = "none";
